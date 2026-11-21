@@ -1,5 +1,7 @@
 __pycache__/
 dist/
+dist-native/
+macos/.build/
 *.spec
 jev_key.txt
 .venv/
