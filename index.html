@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Poker Solver</title>
+<style>
+  :root { --bg:#0f1a15; --line:#2c5a45; --text:#eef3ef; --dim:#9db5a8; --gold:#e8c468; --red:#d9483b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:680px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 10px; }
+  .note { color:var(--dim); font-size:13px; }
+  button { font:inherit; font-weight:600; color:var(--text); background:#24523d; border:1px solid var(--line); border-radius:8px; padding:10px 16px; cursor:pointer; }
+  button:hover { background:#2d6149; }
+  button:disabled { opacity:.5; }
+  input { font:inherit; color:var(--text); background:#0b130f; border:1px solid var(--line); border-radius:8px; padding:8px; width:96px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; align-items:center; }
+  #shot, #crop { max-width:100%; border-radius:8px; }
+  #bar { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:99; width:min(620px,94vw);
+         background:#0b130f; border:1px solid var(--gold); border-radius:12px; padding:10px 14px; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  #barGrip { cursor:grab; color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.08em; display:flex; justify-content:space-between; gap:10px; }
+  #barAction { font-size:28px; font-weight:800; color:var(--gold); line-height:1.2; }
+  #barFigs { display:flex; gap:14px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+  #barFigs b { color:var(--gold); }
+  .flash { outline:2px solid var(--gold); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div id="bar" hidden>
+    <div id="barGrip"><span>⠿ Live play — drag me</span><span id="barStatus">not watching</span></div>
+    <div id="barAction">Press Watch, pick your poker window</div>
+    <div id="barFigs"></div>
+    <div class="note" id="barWhy"></div>
+  </div>
+
+  <h1>Live Poker Solver</h1>
+  <div class="row">
+    <button id="watch">▶ Watch my table</button>
+    <button id="pin">Pin bar on top</button>
+    <span class="note" id="scanNote">Pick the Chrome window/tab with your game. That is how it knows.</span>
+  </div>
+  <img id="shot" alt="" hidden>
+  <canvas id="crop" hidden></canvas>
+  <div class="row">
+    <input id="fHero" placeholder="Hero AhKd" style="width:110px">
+    <input id="fBoard" placeholder="Board Qs7h2c" style="width:130px">
+    <input id="fPot" type="number" min="0" placeholder="Pot">
+    <input id="fCall" type="number" min="0" placeholder="To call">
+    <input id="fOpp" type="number" min="1" value="1" hidden>
+    <input id="fStack" type="number" min="0" placeholder="Stack">
+    <button id="analyse">Solve</button>
+    <button id="scan" hidden>Read screenshot</button>
+  </div>
+  <div id="schemaNote" class="note"></div>
+  <div id="verdict" style="margin-top:8px"></div>
+  <div id="sizes" class="note"></div>
+  <p class="note">GTO-style equity solver: exact on flop/turn/river vs a range, Monte Carlo otherwise. Not a full CFR solver. Study use — check your site's rules.</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
