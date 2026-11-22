@@ -14,8 +14,13 @@ extension CFRSolver {
         // Facing a bet on flop/turn, future streets set the real price:
         // the multi-street engine earned this spot in golden tests
         // (folds blanks, raises made hands, mixes the draw call).
-        if toCall > 0, let multi = MultiStreet.solve(hero: hero, board: board, pot: pot, toCall: toCall, stack: stack, villainKind: villainKind) {
-            return multi
+        if toCall > 0 {
+            let key = "\(hero.map { $0.code }.joined())|\(board.map { $0.code }.joined())|\(pot)|\(toCall)|\(stack ?? -1)|\(villainKind)"
+            if let hit = multiCache[key] { return hit }
+            if let multi = MultiStreet.solve(hero: hero, board: board, pot: pot, toCall: toCall, stack: stack, villainKind: villainKind) {
+                multiCache[key] = multi
+                return multi
+            }
         }
         let model = buildModel(hero: hero, board: board, villainKind: villainKind)
         let H = model.heroW.count, V = model.villainW.count

@@ -50,7 +50,7 @@ final class AppState: ObservableObject {
     func setScale(_ v: Double) {
         uiScale = max(0.7, min(1.8, v))
         UserDefaults.standard.set(uiScale, forKey: "uiScale")
-        panel?.setContentSize(NSSize(width: 780 * uiScale, height: 230 * uiScale))
+        panel?.setContentSize(NSSize(width: 860 * uiScale, height: 330 * uiScale))
     }
     @Published var tableInfo: Jev.TableInfo?
     @Published var blindsCrop: NSImage?
@@ -107,7 +107,7 @@ final class AppState: ObservableObject {
         watchTask = Task { [weak self] in
             while let self = self, self.watching, !Task.isCancelled {
                 await self.autoTick()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
             }
         }
         _ = window
@@ -202,7 +202,7 @@ final class AppState: ObservableObject {
                     return
                 }
             }
-            let bigChange = lastFingerprint.map { Capture.diffRatio($0, fp) > 0.35 } ?? false
+            let bigChange = lastFingerprint.map { Capture.diffRatio($0, fp) > 0.10 } ?? false
             if let prev = lastSchema, !bigChange {
                 let d = try await Jev.detect(jpegB64: b64, prev: prev)
                 status = "Change check: board \(Int(d.board * 100))%, new hand \(Int(d.hero * 100))%, pot \(Int(d.pot * 100))%\(d.turn > 0.5 ? " — your turn" : "")."
@@ -280,7 +280,7 @@ final class AppState: ObservableObject {
 
     func showPanel() {
         if panel == nil {
-            let p = NSPanel(contentRect: NSRect(x: 140, y: 560, width: 780 * uiScale, height: 230 * uiScale),
+            let p = NSPanel(contentRect: NSRect(x: 120, y: 480, width: 860 * uiScale, height: 330 * uiScale),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .floating
             p.isMovableByWindowBackground = true
@@ -444,27 +444,48 @@ struct CardRow: View {
 struct OverlayView: View {
     @EnvironmentObject var s: AppState
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 ForEach(spacedCards(s.heroText).split(separator: " ").map(String.init), id: \.self) { CardChip(code: $0) }
                 Text("·").foregroundStyle(.gray)
                 if s.boardText.isEmpty { Text("no board yet").font(.caption).foregroundStyle(.gray) }
                 else { ForEach(spacedCards(s.boardText).split(separator: " ").map(String.init), id: \.self) { CardChip(code: $0) } }
                 Spacer()
-                Text(s.watching ? "●" : "").foregroundStyle(.green).font(.caption)
+                Text(s.watching ? "● live \(s.lastRead)" : "").font(.caption).foregroundStyle(.green)
             }
             if let a = s.advice {
                 Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
                      : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
                     .font(.system(size: 36, weight: .heavy)).foregroundStyle(.yellow)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if a.mix != a.action && !a.mix.isEmpty {
+                    Text("Solver mix: \(a.mix)").font(.caption).foregroundStyle(.white.opacity(0.75))
+                }
+                Text(a.handDetail + (a.draw != nil ? ", with a \(a.draw!)" : ""))
+                    .font(.headline).foregroundStyle(.white)
+                HStack(spacing: 8) {
+                    Stat(label: "WIN (EQUITY)", value: "\(Int((a.equity * 100).rounded()))%", sub: "wins, of 100")
+                    Stat(label: "YOU NEED", value: a.needed > 0 ? "\(Int((a.needed * 100).rounded()))%" : "—", sub: a.needed > 0 ? "to pay for a call" : "checking is free")
+                    Stat(label: "CALL EARNS", value: "\(a.evCall >= 0 ? "+" : "")\(num(a.evCall))", sub: "\(s.unit), long run")
+                }
                 EquityBar(a: a).frame(maxWidth: .infinity)
-                Text("Win \(Int((a.equity * 100).rounded()))" + (a.needed > 0 ? " · Need \(Int((a.needed * 100).rounded()))" : "") + " · \(a.handDetail) · call earns \(a.evCall >= 0 ? "+" : "")\(num(a.evCall)) \(s.unit)")
-                    .font(.caption).foregroundStyle(.white).lineLimit(1)
+                Text(a.needed > 0
+                     ? "Out of 100: you win about \(Int((a.equity * 100).rounded())), need \(Int((a.needed * 100).rounded())) — \(a.equity >= a.needed ? "calling pays" : "calling loses money")."
+                     : "Out of 100: you win about \(Int((a.equity * 100).rounded())). Checking is free.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    if a.outs > 0 { Text("~\(a.outs) outs").font(.caption).foregroundStyle(.white.opacity(0.85)) }
+                    if let f = a.foldPct { Text("they fold ~\(Int((f * 100).rounded()))%").font(.caption).foregroundStyle(.white.opacity(0.85)) }
+                    if !s.potText.isEmpty { Text("Pot \(s.potText) \(s.unit)").font(.caption).foregroundStyle(.white.opacity(0.85)) }
+                    if !s.callText.isEmpty && s.callText != "0" { Text("Call \(s.callText) \(s.unit)").font(.caption).foregroundStyle(.white.opacity(0.85)) }
+                }
+                if let d = a.danger { Text(d).font(.caption).foregroundStyle(.orange).lineLimit(1) }
+                Text("Sizes: " + a.sizes.map { "\(String(format: "%g", $0.0))x=\(num($0.1))" }.joined(separator: " · "))
+                    .font(.caption2).foregroundStyle(.gray).lineLimit(1)
             } else {
-                Text(s.status).foregroundStyle(.white).lineLimit(2).font(.caption)
+                Text(s.status).foregroundStyle(.white).lineLimit(3)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
             HStack {
                 Spacer()
                 Button("A−") { s.setScale(s.uiScale - 0.1) }.buttonStyle(.plain).font(.caption).foregroundStyle(.gray)
@@ -473,8 +494,8 @@ struct OverlayView: View {
                 Button("Stop") { s.stopWatch() }.buttonStyle(.plain).font(.caption2).foregroundStyle(.gray)
             }
         }
-        .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.black.opacity(0.92))
+        .padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.black.opacity(0.94))
         .scaleEffect(s.uiScale, anchor: .topLeading)
     }
 }

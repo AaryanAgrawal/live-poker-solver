@@ -13,6 +13,7 @@ enum CFRSolver {
     }
 
     static var cache: [String: BucketModel] = [:]
+    static var multiCache: [String: Output] = [:]
 
     struct BucketModel {
         let heroBucketOf: [Int: Int]      // combo index (a*64+b) -> bucket
