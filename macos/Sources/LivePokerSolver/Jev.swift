@@ -51,15 +51,12 @@ enum Jev {
 
     static func scan(jpegB64: String) async throws -> GameSchema {
         var q: [String: Any] = [:]
-        var deckCriteria: [String: String] = ["?": "Unreadable or no card here"]
-        for r in "AKQJT98765432" { for (suit, name) in [("s", "spades"), ("h", "hearts"), ("d", "diamonds"), ("c", "clubs")] {
-            deckCriteria["\(r)\(suit)"] = "\(r) of \(name)"
-        } }
         for slot in slots {
             let place = slot == "hero1" ? "the hero's left hole card at the bottom of the table"
                 : slot == "hero2" ? "the hero's right hole card at the bottom of the table"
                 : "board card \(slot.last!) from the left in the middle of the table"
-            q["\(slot)_card"] = ["type": "choice", "instructions": "In image `shot`, exactly which playing card is \(place)? Choose ? if there is no such card or it cannot be read.", "criteria": deckCriteria]
+            q["\(slot)_rank"] = ["type": "choice", "instructions": "In image `shot`, rank of \(place)? Choose ? if none/unreadable.", "criteria": ranks]
+            q["\(slot)_suit"] = ["type": "choice", "instructions": "In image `shot`, suit of \(place)? Choose ? if none/unreadable.", "criteria": suits]
         }
         q["tables"] = ["type": "choice", "instructions": "In image `shot`, is there one poker table, or several tables tiled together?",
                         "criteria": ["one": "A single poker table", "multiple": "Several poker tables tiled on one screen"]]
@@ -79,9 +76,10 @@ enum Jev {
         var schema = GameSchema()
         var cards: [String: String] = [:], conf: [String: Double] = [:]
         for slot in slots {
-            let (card, cc) = choice("\(slot)_card")
-            cards[slot] = (card == nil || card == "?") ? nil : card
-            conf[slot] = cc ?? 1
+            let (r, rc) = choice("\(slot)_rank")
+            let (su, sc) = choice("\(slot)_suit")
+            cards[slot] = (r == nil || r == "?" || su == nil || su == "?") ? nil : r! + su!
+            conf[slot] = min(rc ?? 1, sc ?? 1)
         }
         var seen = Set<String>()
         for slot in slots {

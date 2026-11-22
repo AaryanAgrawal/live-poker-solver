@@ -1,5 +1,7 @@
 # Live Poker Solver
 
+> **Status: not trusted for live decisions.** The owner reports the live advice is wrong in real play. See [AUDIT_HANDOFF.md](AUDIT_HANDOFF.md) for the full independent-check brief before relying on anything here.
+
 A native macOS live Texas Hold'em coach that works with **any** poker site, on calls too, because it reads only the one window you pick.
 
 1. Open your game anywhere (browser, client, even a video), then in the app pick that window and press **Watch my table**.

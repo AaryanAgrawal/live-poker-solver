@@ -214,6 +214,7 @@ final class AppState: ObservableObject {
             }
             detectMisses = 0
             status = "Reading table with Jev…"
+            advice = nil
             let schema = try await scanSmart(image, fullB64: b64)
             if schema.tables == "multiple" {
                 status = "Several tables on screen — make ONE table big and I will read just that one."
@@ -248,6 +249,18 @@ final class AppState: ObservableObject {
 
     /// Scan the table crop (cards big) instead of the whole window (cards tiny).
     func scanSmart(_ image: CGImage, fullB64: String) async throws -> GameSchema {
+        var first: GameSchema? = nil
+        if let box = Capture.tableBox(image), let cg = Capture.cropCG(image, box: box), let data = Capture.jpeg(cg, quality: 0.85) {
+            first = try? await Jev.scan(jpegB64: data.base64EncodedString())
+            if let f = first, f.hero.count == 2 { return f }
+        }
+        let full = try await Jev.scan(jpegB64: fullB64)
+        if full.hero.count == 2 { return full }
+        if let f = first { return f }
+        return full
+    }
+
+    func scanSmartUnused(_ image: CGImage, fullB64: String) async throws -> GameSchema {
         if let box = Capture.tableBox(image), let cg = Capture.cropCG(image, box: box), let data = Capture.jpeg(cg, quality: 0.85) {
             var schema = try await Jev.scan(jpegB64: data.base64EncodedString())
             if let pot = schema.potBox, let l = box["left"], let t = box["top"], let w = box["right"].map({ $0 - l }), let h = box["bottom"].map({ $0 - t }) {
