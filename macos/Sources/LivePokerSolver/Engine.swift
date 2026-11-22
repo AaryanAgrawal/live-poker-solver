@@ -349,6 +349,8 @@ enum SelfTest {
         check(strong.action == "BET", "CFR aces flop bets (\(strong.mix))")
         let weakRiver = analyse(hero: parseCards("7c2d"), board: parseCards("Qs9h4cKd3s"), pot: 100, toCall: 50, opponents: 1, stack: 1000)
         check(weakRiver.action == "FOLD", "CFR weak river folds (\(weakRiver.mix))")
+        let kuhn = KuhnTest.run()
+        check(abs(kuhn - (-1.0 / 18.0)) < 0.01, "Kuhn CFR value \(String(format: "%.4f", kuhn)) vs known -0.0556")
         print(String(format: "ALL PASS in %.2fs", Date().timeIntervalSince(t0)))
         exit(0)
     }
