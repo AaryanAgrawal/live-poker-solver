@@ -5,6 +5,7 @@ struct GameSchema {
     var heroTurn: Double?, facingBet: Double?
     var unit = "chips"
     var opponents = 1
+    var tables = "one"
     var potBox: [String: Double]?
     var lowConfidence: [String] = []
 }
@@ -57,6 +58,8 @@ enum Jev {
             q["\(slot)_rank"] = ["type": "choice", "instructions": "In image `shot`, rank of \(place)? Choose ? if none/unreadable.", "criteria": ranks]
             q["\(slot)_suit"] = ["type": "choice", "instructions": "In image `shot`, suit of \(place)? Choose ? if none/unreadable.", "criteria": suits]
         }
+        q["tables"] = ["type": "choice", "instructions": "In image `shot`, is there one poker table, or several tables tiled together?",
+                        "criteria": ["one": "A single poker table", "multiple": "Several poker tables tiled on one screen"]]
         q["street"] = ["type": "choice", "instructions": "In image `shot`, how many board cards are face up?",
                        "criteria": ["0": "None preflop", "3": "Three flop", "4": "Four turn", "5": "Five river"]]
         q["hero_turn"] = ["type": "noul", "instructions": "In image `shot`, is it the hero's turn (Fold/Call/Raise active for hero)?"]
@@ -90,6 +93,7 @@ enum Jev {
         schema.facingBet = (a["facing_bet"] as? [String: Any])?["noul"] as? Double
         schema.potBox = (a["pot_box"] as? [String: Any])?["box"] as? [String: Double]
         let (oppChoice, _) = choice("opponents"); schema.opponents = Int(oppChoice ?? "1") ?? 1
+        let (tabChoice, _) = choice("tables"); schema.tables = tabChoice ?? "one"
         schema.lowConfidence = conf.filter { $0.value < 0.7 }.map { $0.key }.sorted()
         return schema
     }

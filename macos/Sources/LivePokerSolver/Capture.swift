@@ -40,15 +40,24 @@ enum Capture {
         NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
+    static func rgbaPixels(_ image: CGImage, _ w: Int, _ h: Int) -> [UInt8] {
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let raw = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        var out = [UInt8](repeating: 0, count: w * h * 4)
+        for y in 0..<h { for x in 0..<w {
+            let src = y * ctx.bytesPerRow + x * 4, dst = (y * w + x) * 4
+            out[dst] = raw[src]; out[dst + 1] = raw[src + 1]; out[dst + 2] = raw[src + 2]; out[dst + 3] = 255
+        } }
+        return out
+    }
+
     /// Tiny grayscale fingerprint. Board changes move many pixels; clocks and
     /// animations move few, so this cheap gate runs before any Jev call.
     static func fingerprint(_ image: CGImage) -> [UInt8] {
-        let w = 48, h = 27
-        var px = [UInt8](repeating: 0, count: w * h)
-        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
-                            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return px
+        let px = rgbaPixels(image, 48, 27)
+        return stride(from: 0, to: px.count, by: 4).map { px[$0] }
     }
 
     static func diffRatio(_ a: [UInt8], _ b: [UInt8]) -> Double {
@@ -74,10 +83,7 @@ extension Capture {
     /// Cheap local guess that a window holds a poker table: lots of green/brown felt.
     static func feltScore(_ image: CGImage) -> Double {
         let w = 96, h = 54
-        var px = [UInt8](repeating: 0, count: w * h * 4)
-        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = rgbaPixels(image, w, h)
         var felt = 0
         for i in stride(from: 0, to: px.count, by: 4) {
             let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
@@ -94,10 +100,7 @@ extension Capture {
     /// Scanning this crop instead of the whole window makes cards far bigger for Jev.
     static func tableBox(_ image: CGImage) -> [String: Double]? {
         let w = 192, h = 108
-        var px = [UInt8](repeating: 0, count: w * h * 4)
-        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = rgbaPixels(image, w, h)
         func felt(_ i: Int) -> Bool {
             let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
             return (g > r + 8 && g >= b && g > 45) || (r > 70 && r > g && g > b && r < 190)

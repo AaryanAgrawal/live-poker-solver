@@ -132,7 +132,9 @@ final class AppState: ObservableObject {
             guard let data = Capture.jpeg(image) else { return }
             status = "Checking \(cand.label)…"
             let schema = try await scanSmart(image, fullB64: data.base64EncodedString())
-            if schema.hero.count == 2 {
+            if schema.tables == "multiple" {
+                status = "That screen has several tables tiled. Make ONE table fill its window and I will read it."
+            } else if schema.hero.count == 2 {
                 lockedID = cand.id; selectedID = cand.id; emptyReads = 0; searchQueue = nil
                 status = "Found your table: \(cand.label). Reading it live…"
                 await tick(cand.window)
@@ -186,6 +188,10 @@ final class AppState: ObservableObject {
             detectMisses = 0
             status = "Reading table with Jev…"
             let schema = try await scanSmart(image, fullB64: b64)
+            if schema.tables == "multiple" {
+                status = "Several tables on screen — make ONE table big and I will read just that one."
+                return
+            }
             if schema.hero.isEmpty {
                 emptyReads += 1
                 if emptyReads >= 2 { lockedID = nil; lastSchema = nil; status = "Lost the poker table — looking again…"; return }
