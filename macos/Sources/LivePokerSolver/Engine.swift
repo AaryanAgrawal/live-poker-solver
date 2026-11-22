@@ -257,7 +257,34 @@ func boardDanger(_ board: [Card]) -> String? {
     return nil
 }
 
-func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents: Int, stack: Double?) -> Advice {
+func buildRange(pairsFrom: Int?, suited: [(Int, Int)], offsuit: [(Int, Int)], exact: [String]) -> Set<String> {
+    var out = Set(exact)
+    if let minPair = pairsFrom {
+        for r in minPair...12 { out.insert("\(RANKS[r])\(RANKS[r])") }
+    }
+    for (hi, loMin) in suited where hi >= 1 {
+        for lo in loMin..<hi { out.insert("\(RANKS[hi])\(RANKS[lo])s") }
+    }
+    for (hi, loMin) in offsuit where hi >= 1 {
+        for lo in loMin..<hi { out.insert("\(RANKS[hi])\(RANKS[lo])o") }
+    }
+    return out
+}
+
+// Rank indexes: 2=0 ... T=8, J=9, Q=10, K=11, A=12. (hi, lowest second card)
+let RFI_RANGES: [String: Set<String>] = [
+    "UTG": buildRange(pairsFrom: 5, suited: [(12, 7), (11, 10), (10, 9), (9, 8), (8, 7)], offsuit: [(12, 10)], exact: []),
+    "MP": buildRange(pairsFrom: 4, suited: [(12, 6), (11, 8), (10, 7), (9, 7), (8, 7), (7, 6)], offsuit: [(12, 8), (11, 10)], exact: []),
+    "CO": buildRange(pairsFrom: 3, suited: [(12, 3), (11, 7), (10, 7), (9, 7), (8, 6), (7, 5), (6, 4), (5, 4), (4, 3)], offsuit: [(12, 7), (11, 8), (10, 8), (9, 8)], exact: []),
+    "BTN": buildRange(pairsFrom: 0, suited: [(12, 0), (11, 5), (10, 6), (9, 6), (8, 5), (7, 5), (6, 4), (5, 3), (4, 2)], offsuit: [(12, 1), (11, 7), (10, 7), (9, 7), (8, 7)], exact: []),
+    "SB": buildRange(pairsFrom: 0, suited: [(12, 0), (11, 7), (10, 7), (9, 7), (8, 7), (7, 5), (6, 4)], offsuit: [(12, 5), (11, 8), (10, 8), (9, 8)], exact: []),
+    "BB": buildRange(pairsFrom: 0, suited: [(12, 0), (11, 5), (10, 6), (9, 6), (8, 5), (7, 5), (6, 4), (5, 3), (4, 2)], offsuit: [(12, 1), (11, 7), (10, 7), (9, 7), (8, 7)], exact: []),
+]
+let THREEBET_RANGE: Set<String> = buildRange(pairsFrom: 8, suited: [(12, 10)], offsuit: [(12, 10)], exact: ["A2s", "A3s", "A4s", "A5s"])
+let CALL_RANGE: Set<String> = buildRange(pairsFrom: 0, suited: [(12, 7), (11, 9), (10, 9), (9, 8), (8, 7)], offsuit: [(11, 10)], exact: [])
+    .subtracting(buildRange(pairsFrom: 8, suited: [], offsuit: [], exact: []))
+
+func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents: Int, stack: Double?, position: String = "CO") -> Advice {
     let villain = toCall > 0 ? "bet" : "any"
     let eq = equity(hero: hero, board: board, opponents: opponents, villain: villain)
     let e = eq.value
@@ -269,7 +296,7 @@ func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents
     let wetBoard = !board.isEmpty && (hasDraw(hero + board).flush || hasDraw(hero + board).straight || (0..<4).contains { su in board.filter { $0.suit == su }.count >= 2 })
     let sized = canRaise && pot > 0 ? bestSize(pot: pot, toCall: toCall, eq: e, wet: wetBoard) : nil
     var action: String
-    let available: [String]
+    var available: [String]
     if toCall == 0 {
         available = canRaise && pot > 0 ? ["CHECK", "BET"] : ["CHECK"]
         action = available.contains("BET") && sized != nil && sized!.ev > 0 ? "BET" : "CHECK"
@@ -304,6 +331,32 @@ func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents
         : action == "CALL" ? "You need \(Int((need * 100).rounded()))% and have \(Int((e * 100).rounded()))%."
         : action == "FOLD" ? "You need \(Int((need * 100).rounded()))% but have \(Int((e * 100).rounded()))%."
         : "Free to check; not strong enough to build the pot."
+    if board.isEmpty {
+        let cls = handClass(hero)
+        let openSet = RFI_RANGES[position] ?? RFI_RANGES["CO"]!
+        if toCall == 0 {
+            available = ["FOLD", "BET"]
+            action = openSet.contains(cls) ? "BET" : "FOLD"
+            fraction = action == "BET" ? 0.5 : nil
+            why = openSet.contains(cls)
+                ? "GTO preflop: \(cls) opens from \(position) (simplified 100BB chart)."
+                : "GTO preflop: \(cls) does not open from \(position). Fold it (check only if free in the big blind)."
+        } else if THREEBET_RANGE.contains(cls) {
+            action = "RAISE"; fraction = 1.0
+            why = "GTO preflop: \(cls) is a re-raise (3-bet) hand (simplified 100BB chart)."
+        } else if CALL_RANGE.contains(cls) {
+            action = "CALL"; fraction = nil
+            why = "GTO preflop: \(cls) calls a raise here (simplified 100BB chart)."
+        } else {
+            action = "FOLD"; fraction = nil
+            why = "GTO preflop: \(cls) folds to a raise (simplified 100BB chart)."
+        }
+        if action == "BET" || action == "RAISE" {
+            amount = sizeFor(fraction ?? 0.5, pot, toCall)
+            if let stack = stack { amount = min(amount, stack) }
+        } else if action == "CALL" { amount = toCall }
+        mix = action
+    }
     var chosenFold = fraction != nil ? sized?.fold : nil
     var chosenSizeEV = fraction != nil ? sized?.ev : nil
     var evFinal = ev
@@ -349,6 +402,12 @@ enum SelfTest {
         check(strong.action == "BET", "CFR aces flop bets (\(strong.mix))")
         let weakRiver = analyse(hero: parseCards("7c2d"), board: parseCards("Qs9h4cKd3s"), pot: 100, toCall: 50, opponents: 1, stack: 1000)
         check(weakRiver.action == "FOLD", "CFR weak river folds (\(weakRiver.mix))")
+        let preAA = analyse(hero: parseCards("AhAd"), board: [], pot: 40, toCall: 20, opponents: 1, stack: 1000)
+        check(preAA.action == "RAISE", "GTO preflop AA re-raises (\(preAA.action))")
+        let pre72 = analyse(hero: parseCards("7c2d"), board: [], pot: 40, toCall: 20, opponents: 1, stack: 1000)
+        check(pre72.action == "FOLD", "GTO preflop 72o folds (\(pre72.action))")
+        let preKQs = analyse(hero: parseCards("KhQh"), board: [], pot: 6, toCall: 0, opponents: 1, stack: 1000, position: "BTN")
+        check(preKQs.action == "BET", "GTO preflop KQs opens on BTN (\(preKQs.action))")
         let kuhn = KuhnTest.run()
         check(abs(kuhn - (-1.0 / 18.0)) < 0.01, "Kuhn CFR value \(String(format: "%.4f", kuhn)) vs known -0.0556")
         print(String(format: "ALL PASS in %.2fs", Date().timeIntervalSince(t0)))

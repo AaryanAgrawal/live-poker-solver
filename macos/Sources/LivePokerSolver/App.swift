@@ -351,23 +351,46 @@ struct ContentView: View {
     }
 }
 
+struct Stat: View {
+    let label: String, value: String, sub: String
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title3).bold().monospacedDigit()
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }.frame(maxWidth: .infinity).padding(8)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct AdviceView: View {
     let a: Advice
     @EnvironmentObject var s: AppState
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
+            Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — put in \(num(a.amount)) \(s.unit)"
                  : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
-                .font(.system(size: 30, weight: .heavy)).foregroundStyle(.yellow)
-            Text(a.handDetail + (a.draw != nil ? ", with a \(a.draw!)" : "")).font(.headline)
+                .font(.title).bold().foregroundStyle(.yellow)
             if a.mix != a.action && !a.mix.isEmpty { Text("Solver mix: \(a.mix)").font(.caption).foregroundStyle(.secondary) }
-            if let f = a.foldPct { Text("Opponents fold about \(Int((f * 100).rounded()))% to a play this size.").font(.caption).foregroundStyle(.secondary) }
+            Text("Your hand: \(a.handDetail)\(a.draw != nil ? ", with a \(a.draw!)" : "")").font(.headline)
+            HStack(spacing: 8) {
+                Stat(label: "WIN (EQUITY)", value: "\(Int((a.equity * 100).rounded()))%", sub: "wins, of 100")
+                Stat(label: "YOU NEED", value: a.needed > 0 ? "\(Int((a.needed * 100).rounded()))%" : "—", sub: a.needed > 0 ? "to pay for a call" : "checking is free")
+                Stat(label: "CALL EARNS", value: "\(a.evCall >= 0 ? "+" : "")\(num(a.evCall))", sub: "\(s.unit), long run")
+            }
             EquityBar(a: a)
-            Text("Equity \(Int((a.equity * 100).rounded())) of 100" + (a.needed > 0 ? " — you need \(Int((a.needed * 100).rounded())) to make calling pay" : " — checking is free")
-                 + ". Call earns \(a.evCall >= 0 ? "+" : "")\(num(a.evCall)) \(s.unit) in the long run.")
+            Text(a.needed > 0
+                 ? "Out of 100 hands like this you win about \(Int((a.equity * 100).rounded())). You need at least \(Int((a.needed * 100).rounded())) for paying to be worth it."
+                 : "Out of 100 hands like this you win about \(Int((a.equity * 100).rounded())). Checking costs nothing.")
                 .fixedSize(horizontal: false, vertical: true)
-            if a.outs > 0 { Text("About \(a.outs) cards left that can improve you (outs).").foregroundStyle(.secondary) }
+            Text(a.why).foregroundStyle(.secondary)
+            if a.outs > 0 { Text("About \(a.outs) cards can still improve you (outs).").foregroundStyle(.secondary) }
             if let d = a.danger { Text(d).foregroundStyle(.orange) }
+            if let f = a.foldPct { Text("Opponents fold about \(Int((f * 100).rounded()))% to a play this size.").font(.caption).foregroundStyle(.secondary) }
+            Text("Counting every \(a.villain == "bet" ? "hand they would bet with (pair or better, or a draw)" : "possible opponent hand") · \(a.method), \(a.samples) hands.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("All sizes: " + a.sizes.map { "\(String(format: "%g", $0.0))x pot = \(num($0.1)) \(s.unit)" }.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
@@ -434,12 +457,14 @@ struct OverlayView: View {
                 Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
                      : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
                     .font(.system(size: 36, weight: .heavy)).foregroundStyle(.yellow)
-                EquityBar(a: a)
-                Text("Win \(Int((a.equity * 100).rounded()))" + (a.needed > 0 ? " · Need \(Int((a.needed * 100).rounded()))" : ""))
-                    .font(.caption).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                EquityBar(a: a).frame(maxWidth: .infinity)
+                Text("Win \(Int((a.equity * 100).rounded()))" + (a.needed > 0 ? " · Need \(Int((a.needed * 100).rounded()))" : "") + " · \(a.handDetail) · call earns \(a.evCall >= 0 ? "+" : "")\(num(a.evCall)) \(s.unit)")
+                    .font(.caption).foregroundStyle(.white).lineLimit(1)
             } else {
                 Text(s.status).foregroundStyle(.white).lineLimit(2).font(.caption)
             }
+            Spacer(minLength: 4)
             HStack {
                 Spacer()
                 Button("A−") { s.setScale(s.uiScale - 0.1) }.buttonStyle(.plain).font(.caption).foregroundStyle(.gray)
