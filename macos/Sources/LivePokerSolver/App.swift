@@ -5,7 +5,19 @@ import SwiftUI
 @main
 struct LivePokerSolverApp: App {
     @StateObject private var state = AppState()
-    init() { if CommandLine.arguments.contains("--selftest") { SelfTest.run() } }
+    init() {
+        let args = CommandLine.arguments
+        if args.contains("--selftest") { SelfTest.run() }
+        if let i = args.firstIndex(of: "--solve"), args.count >= i + 6 {
+            let out = CFRSolver.solve(hero: parseCards(args[i + 1]), board: parseCards(args[i + 2]),
+                                      pot: Double(args[i + 3]) ?? 100, toCall: Double(args[i + 4]) ?? 0,
+                                      stack: Double(args[i + 5]), villainKind: (Double(args[i + 4]) ?? 0) > 0 ? "bet" : "any")!
+            for s in out.strategy {
+                print(s.action, s.put, String(format: "%.0f%%", s.freq * 100), "ev", String(format: "%.1f", s.ev))
+            }
+            exit(0)
+        }
+    }
     var body: some Scene {
         WindowGroup("Live Poker Solver") { ContentView().environmentObject(state) }
             .windowResizability(.contentSize)

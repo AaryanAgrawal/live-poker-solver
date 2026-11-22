@@ -44,7 +44,12 @@ extension CFRSolver {
         var jamRegretA = [[[Double]]](repeating: [[Double]](repeating: [0, 0], count: A), count: H)
         var jamAvgA = [[[Double]]](repeating: [[Double]](repeating: [0, 0], count: A), count: H)
 
-        for _ in 0..<700 {
+        let hb0 = model.heroComboBucket
+        var prevStrategy: [Double]? = nil
+        var blocks = 0
+        while blocks < 10 {
+            blocks += 1
+            for _ in 0..<200 {
             let hS = heroRegret.map { regretMatch($0) }
             let vS = villRegret.map { $0.map { regretMatch($0) } }
             let jS = jamRegretA.map { $0.map { regretMatch($0) } }
@@ -99,9 +104,14 @@ extension CFRSolver {
                     for v in 0..<3 { villRegret[vb][a][v] += exp - villPay[vb][a][v] }
                 }
             }
+            let total = heroAvg[hb0].reduce(0, +)
+            let current = heroAvg[hb0].map { total > 0 ? $0 / total : 0 }
+            if let prev = prevStrategy, zip(current, prev).map({ abs($0 - $1) }).max() ?? 1 < 0.008 { break }
+            prevStrategy = current
+        }
         }
 
-        let hb = model.heroComboBucket
+        let hb = hb0
         let sums = heroAvg[hb].reduce(0, +)
         let villSums = villAvg.map { $0.map { $0.reduce(0, +) } }
         var strategy: [(action: String, freq: Double, ev: Double, put: Double)] = []

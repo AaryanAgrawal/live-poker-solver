@@ -79,11 +79,13 @@ enum CFRSolver {
         }
         let heroEq = equities(of: heroCombos, vs: villainCombos)
         let villEq = equities(of: villainCombos, vs: heroCombos)
-        let hb = bucketize(heroCombos, heroEq, 20)
-        let vb = bucketize(villainCombos, villEq, 20)
+        // River hand values are fixed, so finer groups cost nothing in accuracy.
+        let k = boardI.count == 5 ? 60 : 20
+        let hb = bucketize(heroCombos, heroEq, k)
+        let vb = bucketize(villainCombos, villEq, k)
         // Bucket-vs-bucket win rates counted directly, never derived from means.
-        var winSum = [[Double]](repeating: [Double](repeating: 0, count: 20), count: 20)
-        var counts = [[Double]](repeating: [Double](repeating: 0, count: 20), count: 20)
+        var winSum = [[Double]](repeating: [Double](repeating: 0, count: vb.w.count), count: hb.w.count)
+        var counts = [[Double]](repeating: [Double](repeating: 0, count: vb.w.count), count: hb.w.count)
         func tally(_ me: (Int, Int), _ opp: (Int, Int), _ full: [Int]) {
             guard let hb2 = hb.of[comboKey(me.0, me.1)], let vb2 = vb.of[comboKey(opp.0, opp.1)] else { return }
             let m = evalFast([me.0, me.1] + full), t = evalFast([opp.0, opp.1] + full)
@@ -107,8 +109,8 @@ enum CFRSolver {
                 tally(me, opp, full)
             }
         }
-        var matrix = [[Double]](repeating: [Double](repeating: 0.5, count: 20), count: 20)
-        for i in 0..<20 { for j in 0..<20 where counts[i][j] > 0 {
+        var matrix = [[Double]](repeating: [Double](repeating: 0.5, count: vb.w.count), count: hb.w.count)
+        for i in 0..<hb.w.count { for j in 0..<vb.w.count where counts[i][j] > 0 {
             matrix[i][j] = winSum[i][j] / counts[i][j]
         } }
         let heroKey = comboKey(hero[0].value, hero[1].value)

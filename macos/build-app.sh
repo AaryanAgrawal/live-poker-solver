@@ -2,7 +2,8 @@
 # Build, assemble, sign and install Live Poker Solver.app
 set -e
 cd "$(dirname "$0")"
-swift build -c release 2>&1 | tail -1
+swift build -c release
+test -f .build/release/LivePokerSolver || { echo BUILD FAILED; exit 1; }
 APP="../dist-native/Live Poker Solver.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
