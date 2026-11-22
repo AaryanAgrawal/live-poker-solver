@@ -11,6 +11,12 @@ extension CFRSolver {
 
     static func solve(hero: [Card], board: [Card], pot: Double, toCall: Double, stack: Double?, villainKind: String) -> Output? {
         guard board.count >= 3, pot > 0 else { return nil }
+        // Facing a bet on flop/turn, future streets set the real price:
+        // the multi-street engine earned this spot in golden tests
+        // (folds blanks, raises made hands, mixes the draw call).
+        if toCall > 0, let multi = MultiStreet.solve(hero: hero, board: board, pot: pot, toCall: toCall, stack: stack, villainKind: villainKind) {
+            return multi
+        }
         let model = buildModel(hero: hero, board: board, villainKind: villainKind)
         let H = model.heroW.count, V = model.villainW.count
         let effStack = stack ?? pot * 20
