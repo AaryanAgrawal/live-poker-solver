@@ -268,6 +268,8 @@ final class AppState: ObservableObject {
     }
 }
 
+func num(_ v: Double) -> String { v == v.rounded() ? String(Int(v)) : String(format: "%g", v) }
+
 func spacedCards(_ text: String) -> String {
     let c = text.replacingOccurrences(of: " ", with: "")
     guard !c.isEmpty else { return "—" }
@@ -316,6 +318,8 @@ struct AdviceView: View {
                  : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
                 .font(.system(size: 30, weight: .heavy)).foregroundStyle(.yellow)
             Text(a.handDetail + (a.draw != nil ? ", with a \(a.draw!)" : "")).font(.headline)
+            if a.mix != a.action && !a.mix.isEmpty { Text("Solver mix: \(a.mix)").font(.caption).foregroundStyle(.secondary) }
+            if let f = a.foldPct { Text("Opponents fold about \(Int((f * 100).rounded()))% to a play this size.").font(.caption).foregroundStyle(.secondary) }
             EquityBar(a: a)
             Text("Equity \(Int((a.equity * 100).rounded())) of 100" + (a.needed > 0 ? " — you need \(Int((a.needed * 100).rounded())) to make calling pay" : " — checking is free")
                  + ". Call earns \(a.evCall >= 0 ? "+" : "")\(num(a.evCall)) \(s.unit) in the long run.")

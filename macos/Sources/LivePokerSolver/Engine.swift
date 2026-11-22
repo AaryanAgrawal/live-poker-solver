@@ -194,11 +194,30 @@ struct Advice {
     let fraction: Double?, amount: Double, available: [String]
     let hand: String, draw: String?, outs: Int, spr: Double?
     let handDetail: String, danger: String?
+    let foldPct: Double?, sizeEV: Double?
     let villain: String, method: String, samples: Int, se: Double
+    let mix: String
     let sizes: [(Double, Double)], why: String
 }
 
 func pickFraction(_ eq: Double) -> Double { eq >= 0.8 ? 1 : eq >= 0.7 ? 0.75 : eq >= 0.6 ? 0.5 : 1.0 / 3 }
+
+/// Price every size against the villain range: bigger bets fold out more of
+/// their range, but the hands that stay are stronger. Best EV size wins.
+/// This is a model of GTO sizing logic, not a full game-tree solve.
+func bestSize(pot: Double, toCall: Double, eq: Double, wet: Bool = false) -> (fraction: Double, ev: Double, fold: Double) {
+    var best = (fraction: FRACTIONS[0], ev: -Double.infinity, fold: 0.0)
+    for f in FRACTIONS {
+        let extra = f * (pot + toCall)
+        let totalPut = toCall + extra
+        let foldPct = min(0.9, extra / (pot + toCall + extra))
+        let contEq = max(0, min(1, eq * (1 - (wet ? 0.5 : 0.35) * foldPct)))
+        let ev = foldPct * (pot + toCall)
+            + (1 - foldPct) * (contEq * (pot + toCall + 2 * extra) - totalPut)
+        if ev > best.ev { best = (f, ev, foldPct) }
+    }
+    return best
+}
 func sizeFor(_ f: Double, _ pot: Double, _ toCall: Double) -> Double { toCall > 0 ? toCall + f * (pot + toCall) : f * pot }
 
 let RANK_SINGULAR = ["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King", "Ace"]
@@ -244,16 +263,25 @@ func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents
     let e = eq.value
     let need = toCall > 0 ? toCall / (pot + toCall) : 0
     let ev = e * (pot + toCall) - toCall
+    let d0 = board.isEmpty ? (flush: false, straight: false) : hasDraw(hero + board)
+    let draw0 = board.count == 3 || board.count == 4 ? (d0.flush ? "flush draw" : d0.straight ? "straight draw" : nil) : nil
     let canRaise = stack == nil || stack! > toCall
-    let action: String, available: [String]
+    let wetBoard = !board.isEmpty && (hasDraw(hero + board).flush || hasDraw(hero + board).straight || (0..<4).contains { su in board.filter { $0.suit == su }.count >= 2 })
+    let sized = canRaise && pot > 0 ? bestSize(pot: pot, toCall: toCall, eq: e, wet: wetBoard) : nil
+    var action: String
+    let available: [String]
     if toCall == 0 {
         available = canRaise && pot > 0 ? ["CHECK", "BET"] : ["CHECK"]
-        action = available.contains("BET") && e > 1 / Double(opponents + 1) + 0.1 ? "BET" : "CHECK"
+        action = available.contains("BET") && sized != nil && sized!.ev > 0 ? "BET" : "CHECK"
     } else {
         available = ["FOLD", "CALL"] + (canRaise ? ["RAISE"] : [])
-        action = e < need ? "FOLD" : (canRaise && e > 1 / Double(opponents + 1) + 0.15 ? "RAISE" : "CALL")
+        if e < need {
+            action = sized != nil && sized!.ev > ev && draw0 != nil ? "RAISE" : "FOLD"
+        } else {
+            action = canRaise && sized != nil && sized!.ev > ev ? "RAISE" : "CALL"
+        }
     }
-    let fraction = (action == "BET" || action == "RAISE") ? pickFraction(e) : nil
+    var fraction = (action == "BET" || action == "RAISE") ? sized?.fraction : nil
     var amount = fraction != nil ? sizeFor(fraction!, pot, toCall) : (action == "CALL" ? toCall : 0)
     if let stack = stack { amount = min(amount, stack) }
     let d = board.isEmpty ? (flush: false, straight: false) : hasDraw(hero + board)
@@ -261,16 +289,43 @@ func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents
     let hand = board.isEmpty ? "preflop" : HAND_NAMES[evalFast(hero.map { $0.value } + board.map { $0.value }) >> 20]
     let sizes = FRACTIONS.map { f -> (Double, Double) in
         var a = sizeFor(f, pot, toCall); if let stack = stack { a = min(a, stack) }; return (f, (a * 100).rounded() / 100) }
-    let why = action == "BET" || action == "RAISE" ? "You win \(Int((e * 100).rounded()))% — enough to build the pot."
+    var mix = action
+    if toCall == 0, let sized = sized {
+        let alt = max(0.0, sized.ev)
+        if sized.ev > 0 && sized.ev < pot * 0.08 { mix = "BET \(Int(50 + sized.ev / (pot * 0.08) * 40))% · CHECK rest" }
+    } else if let sized = sized, action == "RAISE" || action == "CALL" {
+        let callEV = max(ev, 0.001), raiseEV = max(sized.ev, 0.0)
+        if ev > 0 && abs(raiseEV - callEV) < pot * 0.08 {
+            let r = Int((raiseEV / (raiseEV + callEV) * 100).rounded())
+            mix = "RAISE \(r)% · CALL \(100 - r)%"
+        }
+    }
+    var why = action == "BET" || action == "RAISE" ? "You win \(Int((e * 100).rounded()))% — enough to build the pot."
         : action == "CALL" ? "You need \(Int((need * 100).rounded()))% and have \(Int((e * 100).rounded()))%."
         : action == "FOLD" ? "You need \(Int((need * 100).rounded()))% but have \(Int((e * 100).rounded()))%."
         : "Free to check; not strong enough to build the pot."
-    return Advice(action: action, equity: e, needed: need, evCall: ev, fraction: fraction,
+    var chosenFold = fraction != nil ? sized?.fold : nil
+    var chosenSizeEV = fraction != nil ? sized?.ev : nil
+    var evFinal = ev
+    if opponents == 1, board.count >= 3,
+       let cfr = CFRSolver.solve(hero: hero, board: board, pot: pot, toCall: toCall, stack: stack, villainKind: villain),
+       let top = cfr.strategy.first {
+        action = top.action
+        amount = top.put
+        fraction = (top.action == "BET" || top.action == "RAISE") && pot + toCall > 0 ? (top.put - toCall) / (pot + toCall) : nil
+        evFinal = cfr.strategy.first(where: { $0.action == "CALL" || $0.action == "CHECK" })?.ev ?? ev
+        chosenFold = cfr.villainFold
+        chosenSizeEV = top.ev
+        mix = cfr.strategy.filter { $0.freq > 0.04 }.map { "\($0.action) \(Int(($0.freq * 100).rounded()))%" }.joined(separator: " · ")
+        why = "Full solver (CFR) picks this most often against their range."
+    }
+    return Advice(action: action, equity: e, needed: need, evCall: evFinal, fraction: fraction,
                   amount: (amount * 100).rounded() / 100, available: available, hand: hand, draw: draw,
                   outs: draw == "flush draw" ? 9 : draw == "straight draw" ? 8 : 0,
                   spr: stack != nil && pot > 0 ? (stack! / pot * 10).rounded() / 10 : nil,
                   handDetail: describeHand(hero, board), danger: boardDanger(board),
-                  villain: villain, method: eq.method, samples: eq.samples, se: eq.se, sizes: sizes, why: why)
+                  foldPct: chosenFold, sizeEV: chosenSizeEV,
+                  villain: villain, method: eq.method, samples: eq.samples, se: eq.se, mix: mix, sizes: sizes, why: why)
 }
 
 enum SelfTest {
@@ -290,6 +345,10 @@ enum SelfTest {
         check(aaPre.value > 0.6, "AA preflop vs opening range \(aaPre.value)")
         let adv = analyse(hero: parseCards("AhKh"), board: parseCards("Qh7h2c"), pot: 100, toCall: 50, opponents: 1, stack: 1000)
         check(adv.draw == "flush draw" && adv.outs == 9 && adv.action == "CALL", "flush draw advice \(adv.action)")
+        let strong = analyse(hero: parseCards("AhAd"), board: parseCards("Qs7h2c"), pot: 100, toCall: 0, opponents: 1, stack: 1000)
+        check(strong.action == "BET", "CFR aces flop bets (\(strong.mix))")
+        let weakRiver = analyse(hero: parseCards("7c2d"), board: parseCards("Qs9h4cKd3s"), pot: 100, toCall: 50, opponents: 1, stack: 1000)
+        check(weakRiver.action == "FOLD", "CFR weak river folds (\(weakRiver.mix))")
         print(String(format: "ALL PASS in %.2fs", Date().timeIntervalSince(t0)))
         exit(0)
     }
