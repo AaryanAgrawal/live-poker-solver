@@ -193,12 +193,50 @@ struct Advice {
     let action: String, equity: Double, needed: Double, evCall: Double
     let fraction: Double?, amount: Double, available: [String]
     let hand: String, draw: String?, outs: Int, spr: Double?
+    let handDetail: String, danger: String?
     let villain: String, method: String, samples: Int, se: Double
     let sizes: [(Double, Double)], why: String
 }
 
 func pickFraction(_ eq: Double) -> Double { eq >= 0.8 ? 1 : eq >= 0.7 ? 0.75 : eq >= 0.6 ? 0.5 : 1.0 / 3 }
 func sizeFor(_ f: Double, _ pot: Double, _ toCall: Double) -> Double { toCall > 0 ? toCall + f * (pot + toCall) : f * pot }
+
+let RANK_SINGULAR = ["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King", "Ace"]
+let RANK_PLURAL = ["Twos", "Threes", "Fours", "Fives", "Sixes", "Sevens", "Eights", "Nines", "Tens", "Jacks", "Queens", "Kings", "Aces"]
+
+func describeHand(_ hero: [Card], _ board: [Card]) -> String {
+    if board.isEmpty { return "No cards out yet — just your two cards" }
+    let all = hero + board
+    let cat = evalFast(all.map { $0.value }) >> 20
+    var counts: [Int: Int] = [:]; for c in all { counts[c.rank, default: 0] += 1 }
+    let groups = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key > $1.key }
+    let high = all.map { $0.rank }.max()!
+    switch cat {
+    case 8, 4: return "\(cat == 8 ? "Straight flush" : "Straight"), \(RANK_SINGULAR[high]) high"
+    case 7: return "Four of a kind — \(RANK_PLURAL[groups[0].key])"
+    case 6: return "Full house — \(RANK_PLURAL[groups[0].key]) over \(RANK_PLURAL[groups[1].key])"
+    case 5: return "Flush, \(RANK_SINGULAR[high]) high"
+    case 3: return "Three of a kind — \(RANK_PLURAL[groups[0].key])"
+    case 2: return "Two pair — \(RANK_PLURAL[groups[0].key]) and \(RANK_PLURAL[groups[1].key])"
+    case 1: return "One pair — \(RANK_PLURAL[groups[0].key])"
+    default: return "\(RANK_SINGULAR[high]) high — no pair yet"
+    }
+}
+
+func boardDanger(_ board: [Card]) -> String? {
+    if board.count < 3 { return nil }
+    if (0..<4).contains(where: { s in board.filter { $0.suit == s }.count >= 3 }) {
+        return "Careful: the board has three of one suit, so a flush is possible."
+    }
+    let ranks = Set(board.map { $0.rank })
+    for top in stride(from: 12, through: 3, by: -1) {
+        let window: Set<Int> = top == 3 ? [12, 3, 2, 1, 0] : Set((top - 4)...top)
+        if ranks.intersection(window).count >= 4 { return "Careful: four cards to a straight are on the board." }
+    }
+    var counts: [Int: Int] = [:]; for c in board { counts[c.rank, default: 0] += 1 }
+    if counts.values.contains(where: { $0 >= 2 }) { return "Careful: the board is paired, so a full house is possible." }
+    return nil
+}
 
 func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents: Int, stack: Double?) -> Advice {
     let villain = toCall > 0 ? "bet" : "any"
@@ -231,6 +269,7 @@ func analyse(hero: [Card], board: [Card], pot: Double, toCall: Double, opponents
                   amount: (amount * 100).rounded() / 100, available: available, hand: hand, draw: draw,
                   outs: draw == "flush draw" ? 9 : draw == "straight draw" ? 8 : 0,
                   spr: stack != nil && pot > 0 ? (stack! / pot * 10).rounded() / 10 : nil,
+                  handDetail: describeHand(hero, board), danger: boardDanger(board),
                   villain: villain, method: eq.method, samples: eq.samples, se: eq.se, sizes: sizes, why: why)
 }
 

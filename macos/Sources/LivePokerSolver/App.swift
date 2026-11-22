@@ -33,6 +33,7 @@ final class AppState: ObservableObject {
     @Published var stackText = ""
     @Published var unit = "chips"
     @Published var opponents = 1
+    @Published var lastRead = ""
     @Published var tableInfo: Jev.TableInfo?
     @Published var blindsCrop: NSImage?
     @Published var sbText = ""
@@ -41,29 +42,45 @@ final class AppState: ObservableObject {
     @Published var advice: Advice?
     @Published var preview: NSImage?
     @Published var potCrop: NSImage?
+    private var lockedID: CGWindowID?
+    private var searchQueue: [PokerWindow]?
+    private var emptyReads = 0
     private var lastSchema: GameSchema?
     private var lastFingerprint: [UInt8]?
+    private var detectMisses = 0
     private var watchTask: Task<Void, Never>?
     private var panel: NSPanel?
+    private weak var mainWindow: NSWindow?
 
     var selectedWindow: SCWindow? { windows.first { $0.id == selectedID }?.window }
 
     func refreshWindows() async {
         do { windows = try await Capture.listWindows()
-             if selectedID == 0 { selectedID = windows.first?.id ?? 0 } }
+             if selectedID == 0 || !windows.contains(where: { $0.id == selectedID }) {
+                 let saved = UserDefaults.standard.string(forKey: "lastWindowLabel")
+                 selectedID = windows.first { $0.label == saved }?.id ?? windows.first?.id ?? 0
+             } }
         catch { status = "Window list failed: allow Screen Recording for this app in System Settings → Privacy & Security, then Refresh. (\(error.localizedDescription))" }
     }
 
     func toggleWatch() { watching ? stopWatch() : startWatch() }
 
+    func showMain() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = mainWindow ?? NSApp.windows.first(where: { !($0 is NSPanel) }) { w.makeKeyAndOrderFront(nil) }
+    }
+
     func startWatch() {
-        guard let window = selectedWindow else { status = "Pick a window first (Refresh if the list is empty)."; return }
+        guard !windows.isEmpty else { status = "No windows yet — press Refresh, or open your game first."; return }
+        let window = selectedWindow
         watching = true
         showPanel()
+        mainWindow = NSApp.windows.first { !($0 is NSPanel) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.mainWindow?.orderOut(nil) }
         watchTask = Task { [weak self] in
             while let self = self, self.watching, !Task.isCancelled {
-                await self.tick(window)
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await self.autoTick()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
         _ = window
@@ -72,11 +89,63 @@ final class AppState: ObservableObject {
     func stopWatch() {
         watching = false
         watchTask?.cancel()
+        lockedID = nil
         status = "Stopped."
         panel?.title = "Live Poker Solver"
     }
 
+    /// Find the poker window by itself: score every window locally (fast, no
+    /// Jev), then let Jev confirm only the best-looking candidates.
+    private func autoTick() async {
+        if windows.isEmpty { await refreshWindows() }
+        guard !windows.isEmpty else { status = "No windows to look in. Open your poker game, then Watch."; return }
+        if let lockedID = lockedID, let w = windows.first(where: { $0.id == lockedID }) {
+            await tick(w.window)
+            return
+        }
+        if searchQueue == nil {
+            let deny = ["Dock", "Notification", "WindowManager", "Control Center", "Spotlight", "loginwindow", "ScreenSaver", "Wallpaper"]
+            let cands = windows.filter { w in
+                w.window.frame.width > 500 && w.window.frame.height > 350 && !deny.contains { w.appName.contains($0) }
+            }.sorted { $0.window.frame.width * $0.window.frame.height > $1.window.frame.width * $1.window.frame.height }
+            let keywords = ["poker", "youtube", "ggpoker", "pokerstars", "wsop", "holdem", "hold'em"]
+            var scored: [(PokerWindow, Double)] = []
+            for cand in cands {
+                if let img = try? await Capture.capture(cand.window) {
+                    let boost = keywords.contains { cand.label.lowercased().contains($0) } ? 0.5 : 0.0
+                    scored.append((cand, Capture.feltScore(img) + boost))
+                }
+            }
+            searchQueue = scored.sorted { $0.1 > $1.1 }.filter { $0.1 > 0.08 }.map { $0.0 }
+            status = searchQueue!.isEmpty
+                ? "No poker table found. Put your poker game in its OWN Chrome tab and make that the visible tab — I can only see the front tab. I will keep looking."
+                : "Found \(searchQueue!.count) possible table(s). Confirming with Jev…"
+            return
+        }
+        guard var queue = searchQueue, !queue.isEmpty else { searchQueue = nil; return }
+        heartbeat()
+        let cand = queue.removeFirst()
+        searchQueue = queue
+        do {
+            let image = try await Capture.capture(cand.window)
+            preview = Capture.nsImage(image)
+            guard let data = Capture.jpeg(image) else { return }
+            status = "Checking \(cand.label)…"
+            let schema = try await scanSmart(image, fullB64: data.base64EncodedString())
+            if schema.hero.count == 2 {
+                lockedID = cand.id; selectedID = cand.id; emptyReads = 0; searchQueue = nil
+                status = "Found your table: \(cand.label). Reading it live…"
+                await tick(cand.window)
+            } else {
+                status = "Not a poker hand there. Still looking…"
+            }
+        } catch {
+            status = "Still looking for your poker table… (\(error.localizedDescription))"
+        }
+    }
+
     private func tick(_ window: SCWindow) async {
+        heartbeat()
         guard let current = windows.first(where: { $0.id == selectedID })?.window ?? selectedWindow else { return }
         do {
             let image = try await Capture.capture(current)
@@ -99,18 +168,28 @@ final class AppState: ObservableObject {
             let fp = Capture.fingerprint(image)
             if let last = lastFingerprint, lastSchema != nil {
                 let diff = Capture.diffRatio(last, fp)
-                if diff < 0.01 {
+                if diff < 0.025 {
                     status = "Watching — no board change."
                     return
                 }
             }
-            if let prev = lastSchema {
+            let bigChange = lastFingerprint.map { Capture.diffRatio($0, fp) > 0.35 } ?? false
+            if let prev = lastSchema, !bigChange {
                 let d = try await Jev.detect(jpegB64: b64, prev: prev)
                 status = "Change check: board \(Int(d.board * 100))%, new hand \(Int(d.hero * 100))%, pot \(Int(d.pot * 100))%\(d.turn > 0.5 ? " — your turn" : "")."
-                if !d.changed { lastFingerprint = fp; return }
+                if !d.changed {
+                    detectMisses += 1
+                    if detectMisses < 3 { lastFingerprint = fp; return }
+                    status = "Change gate unsure 3 times — re-reading the table."
+                }
             }
+            detectMisses = 0
             status = "Reading table with Jev…"
-            let schema = try await Jev.scan(jpegB64: b64)
+            let schema = try await scanSmart(image, fullB64: b64)
+            if schema.hero.isEmpty {
+                emptyReads += 1
+                if emptyReads >= 2 { lockedID = nil; lastSchema = nil; status = "Lost the poker table — looking again…"; return }
+            } else { emptyReads = 0 }
             lastSchema = schema
             lastFingerprint = fp
             if !schema.hero.isEmpty { heroText = schema.hero.joined() }
@@ -118,16 +197,38 @@ final class AppState: ObservableObject {
             opponents = schema.opponents
             if let box = schema.potBox { potCrop = Capture.crop(image, box: box) }
             let ocr = OCR.amounts(image)
-            if let pot = ocr.pot { potText = num(pot) }
-            if (schema.facingBet ?? 0) > 0.5, let call = ocr.call { callText = num(call) }
+            let stackGuess = Double(stackText) ?? .infinity
+            if let pot = ocr.pot, pot > 0, pot < stackGuess * 100 { potText = num(pot) }
+            if (schema.facingBet ?? 0) > 0.5, let call = ocr.call, call <= stackGuess { callText = num(call) }
             else if (schema.facingBet ?? 1) <= 0.5 { callText = "0" }
+            let unsureHero = schema.lowConfidence.contains("hero1") || schema.lowConfidence.contains("hero2")
             status = "Jev read: \(schema.hero.joined(separator: " ")) · board \(schema.board.joined(separator: " ")) · vs \(schema.opponents) · unit \(schema.unit)"
+                + (unsureHero ? " — Jev is UNSURE about your cards: check them, then Solve." : "")
                 + (schema.lowConfidence.isEmpty ? "" : " · CHECK: \(schema.lowConfidence.joined(separator: ", "))")
                 + (Double(potText) == nil ? " · type the pot, then Solve." : "")
-            if Double(potText) != nil { solve() }
+            if Double(potText) != nil && !unsureHero { solve() }
         } catch {
-            status = "Watch error: \(error.localizedDescription)"
+            if lockedID != nil { lockedID = nil; lastSchema = nil; searchQueue = nil; status = "That window closed — looking for your table again…" }
+            else { status = "Watch error: \(error.localizedDescription)" }
         }
+    }
+
+    /// Scan the table crop (cards big) instead of the whole window (cards tiny).
+    func scanSmart(_ image: CGImage, fullB64: String) async throws -> GameSchema {
+        if let box = Capture.tableBox(image), let cg = Capture.cropCG(image, box: box), let data = Capture.jpeg(cg, quality: 0.85) {
+            var schema = try await Jev.scan(jpegB64: data.base64EncodedString())
+            if let pot = schema.potBox, let l = box["left"], let t = box["top"], let w = box["right"].map({ $0 - l }), let h = box["bottom"].map({ $0 - t }) {
+                schema.potBox = ["left": l + (pot["left"] ?? 0) * w, "right": l + (pot["right"] ?? 0) * w,
+                                 "top": t + (pot["top"] ?? 0) * h, "bottom": t + (pot["bottom"] ?? 0) * h]
+            }
+            if schema.hero.count == 2 { return schema }
+        }
+        return try await Jev.scan(jpegB64: fullB64)
+    }
+
+    func heartbeat() {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        lastRead = f.string(from: Date())
     }
 
     func solve() {
@@ -136,7 +237,7 @@ final class AppState: ObservableObject {
             status = "Solve needs 2 hero cards, a 0/3/4/5-card board, and a pot."; return
         }
         let toCall = Double(callText) ?? 0, stack = Double(stackText)
-        let opponentsValue = opponents
+        let opponentsValue = toCall > 0 ? 1 : max(1, opponents)
         status = "Solving…"
         Task.detached(priority: .userInitiated) {
             let result = analyse(hero: hero, board: board, pot: pot, toCall: toCall, opponents: opponentsValue, stack: stack)
@@ -146,7 +247,7 @@ final class AppState: ObservableObject {
 
     func showPanel() {
         if panel == nil {
-            let p = NSPanel(contentRect: NSRect(x: 200, y: 600, width: 620, height: 150),
+            let p = NSPanel(contentRect: NSRect(x: 200, y: 620, width: 560, height: 165),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .floating
             p.isMovableByWindowBackground = true
@@ -161,44 +262,29 @@ final class AppState: ObservableObject {
     }
 }
 
+func spacedCards(_ text: String) -> String {
+    let c = text.replacingOccurrences(of: " ", with: "")
+    guard !c.isEmpty else { return "—" }
+    return stride(from: 0, to: c.count, by: 2).map { i in
+        String(c[c.index(c.startIndex, offsetBy: i)..<c.index(c.startIndex, offsetBy: min(i + 2, c.count))])
+    }.joined(separator: " ")
+}
+
 struct ContentView: View {
     @EnvironmentObject var s: AppState
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Live Poker Solver").font(.title2).bold()
-            HStack {
-                Picker("Window", selection: $s.selectedID) {
-                    ForEach(s.windows) { w in Text(w.label).tag(w.id) }
-                }.frame(maxWidth: 420)
-                Button("Refresh") { Task { await s.refreshWindows() } }
-                Button(s.watching ? "Stop" : "▶ Watch my table") { s.toggleWatch() }
-                Button("Pin bar") { s.showPanel() }
-            }
+            Button(s.watching ? "■ Stop" : "▶ Watch my table") { s.toggleWatch() }
+                .font(.title3).bold()
             Text(s.status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let img = s.preview { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 170) }
-            if let info = s.tableInfo {
-                HStack { Text("Table: \(info.line)").foregroundStyle(.secondary)
-                         TextField("SB", text: $s.sbText).frame(width: 60)
-                         TextField("BB", text: $s.bbText).frame(width: 60)
-                         if let bc = s.blindsCrop { Image(nsImage: bc).resizable().scaledToFit().frame(maxHeight: 36) } }
-            }
-            if let crop = s.potCrop {
-                HStack { Text("Pot (type it):").foregroundStyle(.secondary); Image(nsImage: crop).resizable().scaledToFit().frame(maxHeight: 44) }
-            }
-            HStack {
-                TextField("Hero AhKd", text: $s.heroText).frame(width: 100)
-                TextField("Board Qs7h2c", text: $s.boardText).frame(width: 120)
-                TextField("Pot", text: $s.potText).frame(width: 70)
-                TextField("To call", text: $s.callText).frame(width: 70)
-                TextField("Stack", text: $s.stackText).frame(width: 70)
-                Text(s.unit).foregroundStyle(.secondary)
-                Button("Solve") { s.solve() }
-            }.textFieldStyle(.roundedBorder)
+            Text("You: \(spacedCards(s.heroText)) · Board: \(spacedCards(s.boardText))\(s.potText.isEmpty ? "" : " · Pot \(s.potText) \(s.unit)")\(s.callText.isEmpty || s.callText == "0" ? "" : " · To call \(s.callText) \(s.unit)")\(s.lastRead.isEmpty ? "" : " · read \(s.lastRead)")")
+                .font(.caption).foregroundStyle(.secondary)
             if let a = s.advice { AdviceView(a: a) }
-            Text("Call-safe: this app reads only the window you pick; the bar is hidden from shares and recordings. GTO-style equity, not a full solver. Check your site's rules.")
+            Text("Keep your poker game in its own visible tab. The bar floats on top and stays out of call shares.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(14).frame(width: 680)
+        .padding(16).frame(width: 560)
         .task {
             await s.refreshWindows()
             if s.testMode {
@@ -215,20 +301,67 @@ struct ContentView: View {
     }
 }
 
-func num(_ v: Double) -> String { v == v.rounded() ? String(Int(v)) : String(format: "%g", v) }
-
 struct AdviceView: View {
     let a: Advice
     @EnvironmentObject var s: AppState
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — put in \(num(a.amount)) \(s.unit)"
+        VStack(alignment: .leading, spacing: 8) {
+            Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
                  : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
-                .font(.title).bold().foregroundStyle(.yellow)
-            Text("Win \(Int((a.equity * 100).rounded()))% · Need \(Int((a.needed * 100).rounded()))% · Call EV \(a.evCall >= 0 ? "+" : "")\(Int(a.evCall.rounded())) · \(a.hand)\(a.draw != nil ? " + \(a.draw!)" : "")\(a.outs > 0 ? " · ~\(a.outs) outs" : "")\(a.spr != nil ? " · SPR \(a.spr!)" : "") · vs \(a.villain) range")
-            Text(a.why).foregroundStyle(.secondary)
-            Text("Sizes: " + a.sizes.map { "\(String(format: "%g", $0.0))x=\(num($0.1))" }.joined(separator: " · "))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.system(size: 30, weight: .heavy)).foregroundStyle(.yellow)
+            Text(a.handDetail + (a.draw != nil ? ", with a \(a.draw!)" : "")).font(.headline)
+            EquityBar(a: a)
+            Text("Equity \(Int((a.equity * 100).rounded())) of 100" + (a.needed > 0 ? " — you need \(Int((a.needed * 100).rounded())) to make calling pay" : " — checking is free")
+                 + ". Call earns \(a.evCall >= 0 ? "+" : "")\(num(a.evCall)) \(s.unit) in the long run.")
+                .fixedSize(horizontal: false, vertical: true)
+            if a.outs > 0 { Text("About \(a.outs) cards left that can improve you (outs).").foregroundStyle(.secondary) }
+            if let d = a.danger { Text(d).foregroundStyle(.orange) }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// One bar: green fill = your win share, white tick = what you need.
+struct EquityBar: View {
+    let a: Advice
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6).fill(.gray.opacity(0.3))
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(a.needed == 0 || a.equity >= a.needed ? Color.green : Color.red)
+                    .frame(width: g.size.width * min(1, max(0, a.equity)))
+                if a.needed > 0 {
+                    Rectangle().fill(.white).frame(width: 2)
+                        .offset(x: g.size.width * min(1, max(0, a.needed)))
+                }
+            }
+        }.frame(height: 16)
+    }
+}
+
+struct CardChip: View {
+    let code: String
+    var body: some View {
+        let rank = code.first.map { $0 == "T" ? "10" : String($0) } ?? "?"
+        let suit = code.last.map { ["s": "♠", "h": "♥", "d": "♦", "c": "♣"][$0] ?? "" } ?? ""
+        let red = code.last == "h" || code.last == "d"
+        Text("\(rank)\(suit)")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(red ? Color.red : Color.black)
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+struct CardRow: View {
+    let label: String, text: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption2).foregroundStyle(.gray).frame(width: 46, alignment: .leading)
+            if text.isEmpty || text == "—" { Text("—").foregroundStyle(.gray) }
+            else { ForEach(spacedCards(text).split(separator: " ").map(String.init), id: \.self) { CardChip(code: $0) } }
         }
     }
 }
@@ -236,17 +369,29 @@ struct AdviceView: View {
 struct OverlayView: View {
     @EnvironmentObject var s: AppState
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack { Text("⠿ LIVE PLAY").font(.caption).foregroundStyle(.gray); Spacer(); Text(s.watching ? "watching" : "").font(.caption).foregroundStyle(.gray) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(spacedCards(s.heroText).split(separator: " ").map(String.init), id: \.self) { CardChip(code: $0) }
+                Text("·").foregroundStyle(.gray)
+                if s.boardText.isEmpty { Text("no board yet").font(.caption).foregroundStyle(.gray) }
+                else { ForEach(spacedCards(s.boardText).split(separator: " ").map(String.init), id: \.self) { CardChip(code: $0) } }
+                Spacer()
+                Text(s.watching ? "●" : "").foregroundStyle(.green).font(.caption)
+            }
             if let a = s.advice {
-                Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — put in \(num(a.amount)) \(s.unit)"
+                Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
                      : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
-                    .font(.system(size: 26, weight: .heavy)).foregroundStyle(.yellow)
-                Text("Win \(Int((a.equity * 100).rounded()))% · Need \(Int((a.needed * 100).rounded()))% · EV \(a.evCall >= 0 ? "+" : "")\(Int(a.evCall.rounded())) · \(a.hand)\(a.draw != nil ? " + \(a.draw!)" : "")")
-                    .foregroundStyle(.white)
-                Text(a.why).font(.caption).foregroundStyle(.gray).lineLimit(2)
+                    .font(.system(size: 27, weight: .heavy)).foregroundStyle(.yellow)
+                EquityBar(a: a)
+                Text("Win \(Int((a.equity * 100).rounded()))" + (a.needed > 0 ? " · Need \(Int((a.needed * 100).rounded()))" : ""))
+                    .font(.caption).foregroundStyle(.white)
             } else {
-                Text(s.status).foregroundStyle(.white).lineLimit(3)
+                Text(s.status).foregroundStyle(.white).lineLimit(2).font(.caption)
+            }
+            HStack {
+                Spacer()
+                Button("Main") { s.showMain() }.buttonStyle(.plain).font(.caption2).foregroundStyle(.gray)
+                Button("Stop") { s.stopWatch() }.buttonStyle(.plain).font(.caption2).foregroundStyle(.gray)
             }
         }
         .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

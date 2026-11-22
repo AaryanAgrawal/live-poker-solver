@@ -69,3 +69,48 @@ enum Capture {
         cropCG(image, box: box).map { nsImage($0) }
     }
 }
+
+extension Capture {
+    /// Cheap local guess that a window holds a poker table: lots of green/brown felt.
+    static func feltScore(_ image: CGImage) -> Double {
+        let w = 96, h = 54
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var felt = 0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
+            let green = g > r + 8 && g >= b && g > 45
+            let brown = r > 70 && r > g && g > b && r < 190
+            if green || brown { felt += 1 }
+        }
+        return Double(felt) / Double(w * h)
+    }
+}
+
+extension Capture {
+    /// Bounding box (0-1 fractions) of the felt region, found locally.
+    /// Scanning this crop instead of the whole window makes cards far bigger for Jev.
+    static func tableBox(_ image: CGImage) -> [String: Double]? {
+        let w = 192, h = 108
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        func felt(_ i: Int) -> Bool {
+            let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
+            return (g > r + 8 && g >= b && g > 45) || (r > 70 && r > g && g > b && r < 190)
+        }
+        var rows = [Int](repeating: 0, count: h), cols = [Int](repeating: 0, count: w)
+        for y in 0..<h { for x in 0..<w where felt((y * w + x) * 4) { rows[y] += 1; cols[x] += 1 } }
+        guard let top = rows.firstIndex(where: { $0 > w / 10 }), let bottom = rows.lastIndex(where: { $0 > w / 10 }),
+              let left = cols.firstIndex(where: { $0 > h / 10 }), let right = cols.lastIndex(where: { $0 > h / 10 }),
+              right > left, bottom > top else { return nil }
+        let pad = 0.06
+        let box = ["left": max(0, Double(left) / Double(w) - pad), "right": min(1, Double(right + 1) / Double(w) + pad),
+                   "top": max(0, Double(top) / Double(h) - pad), "bottom": min(1, Double(bottom + 1) / Double(h) + pad)]
+        let area = (box["right"]! - box["left"]!) * (box["bottom"]! - box["top"]!)
+        return area > 0.08 && area < 0.95 ? box : nil
+    }
+}

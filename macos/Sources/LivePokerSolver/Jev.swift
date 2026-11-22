@@ -27,10 +27,10 @@ enum Jev {
         return (try? String(contentsOf: path, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    static func post(_ body: [String: Any]) async throws -> [String: Any] {
+    static func post(_ body: [String: Any], timeout: Double = 60) async throws -> [String: Any] {
         let key = loadKey()
         guard !key.isEmpty else { throw JevError.message("No Jev key on this Mac (~/Library/Application Support/Poker Trainer/jev_key.txt).") }
-        var req = URLRequest(url: URL(string: "https://api.typesafe.ai/v1/systemone")!, timeoutInterval: 60)
+        var req = URLRequest(url: URL(string: "https://api.typesafe.ai/v1/systemone")!, timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -135,7 +135,7 @@ enum Jev {
             "hero_turn": ["type": "noul", "instructions": "In image `shot`, is it now the hero's turn?"],
         ]
         var body = asset(jpegB64); body["questions"] = q
-        let raw = try await post(body)
+        let raw = try await post(body, timeout: 25)
         let a = raw["answers"] as? [String: Any] ?? [:]
         func noul(_ n: String) -> Double { (a[n] as? [String: Any])?["noul"] as? Double ?? 0 }
         let b = noul("board_changed"), h = noul("hero_changed"), p = noul("pot_changed"), t = noul("hero_turn")
