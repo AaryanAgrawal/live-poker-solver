@@ -88,7 +88,7 @@ enum Jev {
         let (street, _) = choice("street")
         schema.streetCards = Int(street ?? "0") ?? 0
         schema.hero = [cards["hero1"], cards["hero2"]].compactMap { $0 }
-        schema.board = (1...max(0, schema.streetCards)).compactMap { cards["board\($0)"] }
+        schema.board = schema.streetCards == 0 ? [] : (1...schema.streetCards).compactMap { cards["board\($0)"] }
         schema.heroTurn = (a["hero_turn"] as? [String: Any])?["noul"] as? Double
         schema.facingBet = (a["facing_bet"] as? [String: Any])?["noul"] as? Double
         schema.potBox = (a["pot_box"] as? [String: Any])?["box"] as? [String: Double]

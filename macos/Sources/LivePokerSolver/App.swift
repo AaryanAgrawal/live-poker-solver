@@ -46,6 +46,12 @@ final class AppState: ObservableObject {
     @Published var unit = "chips"
     @Published var opponents = 1
     @Published var lastRead = ""
+    @Published var uiScale: Double = max(0.7, min(1.8, UserDefaults.standard.double(forKey: "uiScale") == 0 ? 1 : UserDefaults.standard.double(forKey: "uiScale")))
+    func setScale(_ v: Double) {
+        uiScale = max(0.7, min(1.8, v))
+        UserDefaults.standard.set(uiScale, forKey: "uiScale")
+        panel?.setContentSize(NSSize(width: 780 * uiScale, height: 230 * uiScale))
+    }
     @Published var tableInfo: Jev.TableInfo?
     @Published var blindsCrop: NSImage?
     @Published var sbText = ""
@@ -77,6 +83,14 @@ final class AppState: ObservableObject {
 
     func toggleWatch() { watching ? stopWatch() : startWatch() }
 
+    func useWindow(_ id: CGWindowID) {
+        selectedID = id
+        if watching { lockedID = id }
+        if let w = windows.first(where: { $0.id == id }) {
+            UserDefaults.standard.set(w.label, forKey: "lastWindowLabel")
+        }
+    }
+
     func showMain() {
         NSApp.activate(ignoringOtherApps: true)
         if let w = mainWindow ?? NSApp.windows.first(where: { !($0 is NSPanel) }) { w.makeKeyAndOrderFront(nil) }
@@ -86,6 +100,7 @@ final class AppState: ObservableObject {
         guard !windows.isEmpty else { status = "No windows yet — press Refresh, or open your game first."; return }
         let window = selectedWindow
         watching = true
+        if selectedID != 0 { lockedID = selectedID }
         showPanel()
         mainWindow = NSApp.windows.first { !($0 is NSPanel) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.mainWindow?.orderOut(nil) }
@@ -265,7 +280,7 @@ final class AppState: ObservableObject {
 
     func showPanel() {
         if panel == nil {
-            let p = NSPanel(contentRect: NSRect(x: 200, y: 620, width: 560, height: 165),
+            let p = NSPanel(contentRect: NSRect(x: 140, y: 560, width: 780 * uiScale, height: 230 * uiScale),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .floating
             p.isMovableByWindowBackground = true
@@ -294,7 +309,22 @@ struct ContentView: View {
     @EnvironmentObject var s: AppState
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Live Poker Solver").font(.title2).bold()
+            Text("Live Poker Solver").font(.largeTitle).bold()
+            HStack {
+                Picker("Window", selection: $s.selectedID) {
+                    ForEach(s.windows) { w in Text(w.label).tag(w.id) }
+                }.frame(maxWidth: 430)
+                .onChange(of: s.selectedID) { id in s.useWindow(id) }
+                Button("Refresh") { Task { await s.refreshWindows() } }
+            }
+            HStack {
+                Text("Size").font(.caption).foregroundStyle(.secondary)
+                Button("A−") { s.setScale(s.uiScale - 0.1) }
+                Text("\(Int((s.uiScale * 100).rounded()))%").font(.caption).monospacedDigit()
+                Button("A+") { s.setScale(s.uiScale + 0.1) }
+            }
+            Text("Pick your Chrome poker window above, or just press Watch and I will look for it.")
+                .font(.caption).foregroundStyle(.secondary)
             Button(s.watching ? "■ Stop" : "▶ Watch my table") { s.toggleWatch() }
                 .font(.title3).bold()
             Text(s.status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -304,7 +334,7 @@ struct ContentView: View {
             Text("Keep your poker game in its own visible tab. The bar floats on top and stays out of call shares.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(16).frame(width: 560)
+        .padding(20).frame(width: 780)
         .task {
             await s.refreshWindows()
             if s.testMode {
@@ -370,7 +400,7 @@ struct CardChip: View {
         let suit = code.last.map { ["s": "♠", "h": "♥", "d": "♦", "c": "♣"][$0] ?? "" } ?? ""
         let red = code.last == "h" || code.last == "d"
         Text("\(rank)\(suit)")
-            .font(.system(size: 15, weight: .bold))
+            .font(.system(size: 19, weight: .bold))
             .foregroundStyle(red ? Color.red : Color.black)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 5))
@@ -403,7 +433,7 @@ struct OverlayView: View {
             if let a = s.advice {
                 Text(a.fraction != nil ? "\(a.action) \(String(format: "%g", a.fraction!))x pot — \(num(a.amount)) \(s.unit)"
                      : a.action == "CALL" ? "CALL \(num(a.amount)) \(s.unit)" : a.action)
-                    .font(.system(size: 27, weight: .heavy)).foregroundStyle(.yellow)
+                    .font(.system(size: 36, weight: .heavy)).foregroundStyle(.yellow)
                 EquityBar(a: a)
                 Text("Win \(Int((a.equity * 100).rounded()))" + (a.needed > 0 ? " · Need \(Int((a.needed * 100).rounded()))" : ""))
                     .font(.caption).foregroundStyle(.white)
@@ -412,11 +442,14 @@ struct OverlayView: View {
             }
             HStack {
                 Spacer()
+                Button("A−") { s.setScale(s.uiScale - 0.1) }.buttonStyle(.plain).font(.caption).foregroundStyle(.gray)
+                Button("A+") { s.setScale(s.uiScale + 0.1) }.buttonStyle(.plain).font(.caption).foregroundStyle(.gray)
                 Button("Main") { s.showMain() }.buttonStyle(.plain).font(.caption2).foregroundStyle(.gray)
                 Button("Stop") { s.stopWatch() }.buttonStyle(.plain).font(.caption2).foregroundStyle(.gray)
             }
         }
         .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.black.opacity(0.92))
+        .scaleEffect(s.uiScale, anchor: .topLeading)
     }
 }
